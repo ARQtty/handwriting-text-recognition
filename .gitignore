@@ -1,2 +1,6 @@
 data/words/*
 .ipnb*
+*pdf
+refs
+__pycache__
+logs/*

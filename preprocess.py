@@ -10,7 +10,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 from os.path import getsize
-get_ipython().magic('matplotlib inline')
 
 datadir = "./data/"
 wordsFile = datadir + "words.txt"
@@ -23,31 +22,27 @@ wordsFile = datadir + "words.txt"
 
 def loadWords():
     columns=['filename', 'word', 'greylvl']
-    
+
     with open(wordsFile, 'r') as words:
         rowsList = []
         for line in words:
-            
+
             # if comment
             if line[0] == "#":
                 continue
-                
+
             data = line.split()
-            data = [data[0], data[8], data[2]]        
+            data = [data[0], data[8], data[2]]
             row = dict( (colName, data[i]) for i, colName in enumerate(columns))
-            
+
             rowsList.append(row)
-    
+
     df = pd.DataFrame(rowsList, columns=columns)
     return df
 
 
 # In[5]:
 
-
-df = loadWords()
-print(df.head())
-print("Dataframe shape:", df.shape)
 
 
 # # Function for prepare each image
@@ -61,7 +56,7 @@ def preprocessImg(filename):
     # Read and load
     filename = filename.split("-")
     path = "/".join([datadir + "words", filename[0], "-".join(filename[:2]), "-".join(filename)+'.png'])
-  
+
     if not (getsize(path)):
         print("Corrupted file "+path)
         return np.zeros((32, 128))
@@ -71,19 +66,19 @@ def preprocessImg(filename):
         print("Problem with loading file "+path)
         return np.zeros((32, 128))
 
-    
+
     # Resize
     (targetW, targetH) = (128, 32)
     (imgH, imgW) = img.shape
-    
+
     fy = targetH / imgH
     fx = targetW / imgW
     f = min(fx, fy)
-    
+
     newSize = (int(np.trunc(imgW*f)), int(np.trunc(imgH*f)))
     newImg = cv2.resize(img, newSize)
-    
-    
+
+
     # Fill to NN pattern
     pattern = np.ones((32, 128)) * 255
     pattern[0:newSize[1], 0:newSize[0]] = np.trunc(newImg * 255)
@@ -94,38 +89,54 @@ def preprocessImg(filename):
 # In[7]:
 
 
-plt.imshow(preprocessImg("a01-000u-00-02"), cmap='gray')
-
-
 # # Image data generator
 
 # In[9]:
 
+def loadCharList():
+    df = loadWords()
+    charList = set()
+
+    for word in list(df.loc[:, 'word']):
+        for c in list(word):
+            charList.add(c)
+
+    return "".join(sorted(charList))
+
 
 def batchGenerator(batchSize=1024, mode='train'):
+    df = loadWords()
+
     start = 0
     # 95% for train
     stop = int(df.shape[0] * 0.95)
     num = 0
-    
+
     if (mode == 'valid'):
             # 5% for validation
             self.start = int(df.shape[0]*0.95)
             self.stop = df.shape[0]
-    
+
     while start + batchSize < stop:
         num += 1
         pathes = df.loc[start:start+batchSize, 'filename']
         imgs = [preprocessImg(path) for path in pathes]
-        batch = np.stack(imgs, axis=0)
+        gtTexts = list(df.loc[start:start+batchSize, 'word'])
+        batch = (np.stack(imgs, axis=0), gtTexts)
         start += batchSize
-        
+
         yield batch
 
 
 # In[11]:
 
 
-for batch in batchGenerator(batchSize=8192, mode='train'):
-    print(batch.shape)
+if __name__ == '__main__':
+    df = loadWords()
+    print(df.head())
+    print("Dataframe shape:", df.shape)
 
+    plt.imshow(preprocessImg("a01-000u-00-02"), cmap='gray')
+
+    for batch in batchGenerator(batchSize=8192, mode='train'):
+        print(batch.shape)
