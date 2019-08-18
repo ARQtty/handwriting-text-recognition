@@ -64,12 +64,12 @@ def preprocessImg(filename):
 
     if not (getsize(path)):
         print("Corrupted file "+path)
-        return np.zeros((32, 128))
+        return np.zeros((128, 32))
     try:
         img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
     except:
         print("Problem with loading file "+path)
-        return np.zeros((32, 128))
+        return np.zeros((128, 32))
 
 
     # Resize
@@ -88,6 +88,13 @@ def preprocessImg(filename):
     pattern = np.ones((32, 128)) * 255
     pattern[0:newSize[1], 0:newSize[0]] =  newImg#№np.trunc(newImg * 255)
 
+    pattern = cv2.transpose(pattern)
+    # normalize
+    (m, s) = cv2.meanStdDev(pattern)
+    m = m[0][0]
+    s = s[0][0]
+    pattern = pattern - m
+    pattern = pattern / s if s>0 else pattern
     return pattern
 
 
