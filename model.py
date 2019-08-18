@@ -1,18 +1,11 @@
 
 # coding: utf-8
-
-# In[1]:
-
-
 import tensorflow as tf
 import numpy as np
 from tensorflow.layers import conv2d, max_pooling2d, flatten
 from tensorflow.nn import relu
 
 import preprocess
-
-
-# In[2]:
 
 
 # IAM dataset contains 79 chars
@@ -22,21 +15,13 @@ maxTextLen = 32
 
 
 # ## Example image
-
-# In[3]:
-
-
 # from matplotlib import pyplot as plt
 # get_ipython().magic('matplotlib inline')
 # img = np.trunc(np.random.random((32, 128)) * 255)
 # plt.imshow(img, cmap='gray')
 
 
-# # Building model
-#
-
-# In[4]:
-
+# Building model
 
 def buildCNN(inputImgs):
     # in (None, 32, 128, 1)
@@ -67,10 +52,6 @@ def buildCNN(inputImgs):
     x = tf.squeeze(x, axis=1)
     return x
 
-
-# In[5]:
-
-
 def buildRNN(inputs):
     with tf.name_scope("RNN"):
         # basic cells which is used to build RNN
@@ -95,10 +76,6 @@ def buildRNN(inputs):
         output = tf.squeeze(tf.nn.atrous_conv2d(value=concat, filters=kernel, rate=1, padding='SAME'), axis=2)
 
     return output
-
-
-# In[6]:
-
 
 def buildCTC(inputs):
     with tf.name_scope("CTC"):
@@ -128,15 +105,13 @@ def buildCTC(inputs):
                                                 beam_width=50,
                                                 merge_repeated=False)
 
+        tf.summary.scalar('batch_loss', loss)
 
     return (gtTextsPlaceholder, seqLenPlaceholder, loss)
 
 
-# # Data flow functions
 
-# In[7]:
-
-
+# Data flow functions
 def toSparse(gtTexts):
     # puts ground truth texts into sparse tensor for ctc_loss
     indices = []
@@ -162,11 +137,8 @@ def toSparse(gtTexts):
     return (indices, values, shape)
 
 
-# # build net's graph
 
-# In[ ]:
-
-
+# build net's graph
 with tf.variable_scope("model", reuse=tf.AUTO_REUSE):
     inputImgsPlaceholder = tf.placeholder(tf.float32, shape=(None, 32, 128))
     cnn = buildCNN(inputImgsPlaceholder)
@@ -178,41 +150,86 @@ with tf.variable_scope("model", reuse=tf.AUTO_REUSE):
     with tf.control_dependencies(update_ops):
         optimizer = tf.train.RMSPropOptimizer(learningRatePlaceholder).minimize(loss)
 
+snapID = 0
+def saveModel(sess):
+    # saves model to file
+    snapID += 1
+    saver = tf.train.Saver(max_to_keep=1) # saver saves model to file
+    saver.save(sess, 'saved_models/snapshot', global_step=snapID)
 
-# # Train network
-
-# In[ ]:
 
 
-batchesTrained = 0
+# Train network
+class EarlyStop():
+    def __init__(self, patience, minDelta):
+        self.patience = patience
+        self.minDelta = minDelta
+        self.notIncrease = 0
+        self.minLoss = float('inf')
 
-batchesLimit = 10e5
-processedBatches = 0
+    def register(self, lossVal):
+        if lossVal < self.minLoss:
+            self.minLoss = lossVal
+            self.notIncrease = 0
+        else:
+            self.notIncrease += 1
+
+    def shouldStop(self):
+
+        return self.notIncrease >= self.patience
+
 
 with tf.Session() as sess:
-    writer = tf.summary.FileWriter("logs", sess.graph)
+# loggers for Tensorboard
+writer = tf.summary.FileWriter("logs", sess.graph)
+mergedLogs = tf.summary.merge_all()
+train_writer = tf.summary.FileWriter('logs/train', sess.graph)
+test_writer = tf.summary.FileWriter('logs/test', sess.graph)
+sess.run(tf.global_variables_initializer())
 
-    for batch in preprocess.batchGenerator(batchSize=512):
+batchSize = 128
+earlyStop = EarlyStop(patience=3, minDelta=0.3)
+testEpochLosses = []
+
+epoch = 1
+while not earlyStop.shouldStop() and epoch <= 2:
+    batchNumber = 0
+    losses = []
+    print("Epoch %d" % epoch)
+    epoch += 1
+
+    # Train
+    for batch in preprocess.batchGenerator(batchSize=batchSize, mode='test'):
         imgs = batch[0]
         gtTexts = batch[1]
         batchLen = len(imgs)
         sparse = toSparse(gtTexts)
+
+        batchesTrained = batchNumber + epoch * batchSize
         rate = 0.01 if batchesTrained < 10 else (0.001 if batchesTrained < 10000 else 0.0001) # decay learning rate
 
-        evalList = [optimizer, loss]
+        evalList = [optimizer, mergedLogs, loss]
         feedDict = {inputImgsPlaceholder : imgs,
                     gtTextsPlaceholder : sparse ,
                     seqLenPlaceholder : [maxTextLen] * batchLen,
                     learningRatePlaceholder : rate}
-        sess.run(tf.global_variables_initializer())
-        (_, lossVal) = sess.run(evalList, feedDict)
+        (_, summaryLoss, lossVal) = sess.run(evalList, feedDict)
         batchesTrained += 1
 
-        print("Batch %d  loss:" % processedBatches, lossVal)
+        print("  Batch %d  loss:" % batchNumber, lossVal)
+        losses.append(lossVal)
+        batchNumber += 1
+        train_writer.add_summary(summaryLoss, batchesTrained)
+        del summaryLoss, batch, _
+    earlyStop.register(sum(losses)/len(losses))
 
-        if processedBatches == batchesLimit:
-            break
-        else:
-            processedBatches += 1
+    print("Epoch %d train summary:  mean loss" % (epoch-1), sum(losses)/len(losses))
 
-print("Finish first epoch")
+    # Test
+    #
+    # if testMeanLoss < testEpochLosses[-1]:
+    #     saveModel(sess)
+    #
+
+
+print("\nFinish learning")

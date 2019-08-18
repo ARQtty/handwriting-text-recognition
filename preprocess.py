@@ -61,7 +61,7 @@ def preprocessImg(filename):
         print("Corrupted file "+path)
         return np.zeros((32, 128))
     try:
-        img = mpimg.imread(path)
+        img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
     except:
         print("Problem with loading file "+path)
         return np.zeros((32, 128))
@@ -81,7 +81,7 @@ def preprocessImg(filename):
 
     # Fill to NN pattern
     pattern = np.ones((32, 128)) * 255
-    pattern[0:newSize[1], 0:newSize[0]] = np.trunc(newImg * 255)
+    pattern[0:newSize[1], 0:newSize[0]] =  newImg#№np.trunc(newImg * 255)
 
     return pattern
 
@@ -112,10 +112,10 @@ def batchGenerator(batchSize=1024, mode='train'):
     stop = int(df.shape[0] * 0.95)
     num = 0
 
-    if (mode == 'valid'):
-            # 5% for validation
-            self.start = int(df.shape[0]*0.95)
-            self.stop = df.shape[0]
+    if (mode == 'test'):
+        # 5% for validation
+        start = int(df.shape[0]*0.95)
+        stop = df.shape[0]
 
     while start + batchSize < stop:
         num += 1
