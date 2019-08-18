@@ -32,6 +32,11 @@ def loadWords():
                 continue
 
             data = line.split()
+            word = data[8]
+            # dataset contains 1 word length 53
+            if len(word) > 32:
+                continue
+
             data = [data[0], data[8], data[2]]
             row = dict( (colName, data[i]) for i, colName in enumerate(columns))
 
@@ -104,7 +109,7 @@ def loadCharList():
     return "".join(sorted(charList))
 
 
-def batchGenerator(batchSize=1024, mode='train'):
+def batchGenerator(batchSize=512, mode='train'):
     df = loadWords()
 
     start = 0

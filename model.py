@@ -4,6 +4,8 @@ import tensorflow as tf
 import numpy as np
 from tensorflow.layers import conv2d, max_pooling2d, flatten
 from tensorflow.nn import relu
+import logging
+tf.get_logger().setLevel(logging.ERROR)
 
 import preprocess
 
@@ -153,6 +155,7 @@ with tf.variable_scope("model", reuse=tf.AUTO_REUSE):
 snapID = 0
 def saveModel(sess):
     # saves model to file
+    global snapID
     snapID += 1
     saver = tf.train.Saver(max_to_keep=1) # saver saves model to file
     saver.save(sess, 'saved_models/snapshot', global_step=snapID)
@@ -172,64 +175,75 @@ class EarlyStop():
             self.minLoss = lossVal
             self.notIncrease = 0
         else:
-            self.notIncrease += 1
+            if lossVal - self.minLoss < self.minDelta:
+                self.notIncrease += 1
 
     def shouldStop(self):
 
         return self.notIncrease >= self.patience
 
 
-with tf.Session() as sess:
-# loggers for Tensorboard
-writer = tf.summary.FileWriter("logs", sess.graph)
-mergedLogs = tf.summary.merge_all()
-train_writer = tf.summary.FileWriter('logs/train', sess.graph)
-test_writer = tf.summary.FileWriter('logs/test', sess.graph)
-sess.run(tf.global_variables_initializer())
 
-batchSize = 128
-earlyStop = EarlyStop(patience=3, minDelta=0.3)
-testEpochLosses = []
 
-epoch = 1
-while not earlyStop.shouldStop() and epoch <= 2:
-    batchNumber = 0
-    losses = []
-    print("Epoch %d" % epoch)
-    epoch += 1
+config = tf.ConfigProto()
+config.gpu_options.allow_growth = True
+config.log_device_placement=True
+with tf.Session(config=config) as sess:
+    # loggers for Tensorboard
+    writer = tf.summary.FileWriter("logs", sess.graph)
+    mergedLogs = tf.summary.merge_all()
+    train_writer = tf.summary.FileWriter('logs/train', sess.graph)
+    test_writer = tf.summary.FileWriter('logs/test', sess.graph)
+    sess.run(tf.global_variables_initializer())
 
-    # Train
-    for batch in preprocess.batchGenerator(batchSize=batchSize, mode='test'):
-        imgs = batch[0]
-        gtTexts = batch[1]
-        batchLen = len(imgs)
-        sparse = toSparse(gtTexts)
+    batchSize = 512
+    earlyStop = EarlyStop(patience=6, minDelta=0.005)
+    trainEpochLosses = [float("inf")]
 
-        batchesTrained = batchNumber + epoch * batchSize
-        rate = 0.01 if batchesTrained < 10 else (0.001 if batchesTrained < 10000 else 0.0001) # decay learning rate
+    epoch = 0
+    while not earlyStop.shouldStop():
+        batchNumber = 0
+        losses = []
+        epoch += 1
+        print("Epoch %d" % epoch)
 
-        evalList = [optimizer, mergedLogs, loss]
-        feedDict = {inputImgsPlaceholder : imgs,
-                    gtTextsPlaceholder : sparse ,
-                    seqLenPlaceholder : [maxTextLen] * batchLen,
-                    learningRatePlaceholder : rate}
-        (_, summaryLoss, lossVal) = sess.run(evalList, feedDict)
-        batchesTrained += 1
+        # Train
+        for batch in preprocess.batchGenerator(batchSize=batchSize, mode='train'):
+            imgs = batch[0]
+            gtTexts = batch[1]
+            batchLen = len(imgs)
+            sparse = toSparse(gtTexts)
 
-        print("  Batch %d  loss:" % batchNumber, lossVal)
-        losses.append(lossVal)
-        batchNumber += 1
-        train_writer.add_summary(summaryLoss, batchesTrained)
-        del summaryLoss, batch, _
-    earlyStop.register(sum(losses)/len(losses))
+            batchesTrained = batchNumber + (epoch-1) * 211000/batchSize
+            rate = 0.01 if batchesTrained < 1000 else (0.0001 if batchesTrained < 10000 else 0.00001) # decay learning rate
 
-    print("Epoch %d train summary:  mean loss" % (epoch-1), sum(losses)/len(losses))
+            evalList = [optimizer, mergedLogs, loss]
+            feedDict = {inputImgsPlaceholder : imgs,
+                        gtTextsPlaceholder : sparse ,
+                        seqLenPlaceholder : [maxTextLen] * batchLen,
+                        learningRatePlaceholder : rate}
+            (_, summaryLoss, lossVal) = sess.run(evalList, feedDict)
+            batchesTrained += 1
 
-    # Test
-    #
-    # if testMeanLoss < testEpochLosses[-1]:
-    #     saveModel(sess)
-    #
+            print("  Batch %d  loss:" % batchNumber, lossVal)
+            losses.append(lossVal)
+            batchNumber += 1
+            train_writer.add_summary(summaryLoss, batchesTrained)
+            del summaryLoss, batch, _
+
+        epochLoss = sum(losses)/len(losses)
+        earlyStop.register(epochLoss)
+        if trainEpochLosses[-1] > epochLoss:
+            saveModel(sess)
+        trainEpochLosses.append(epochLoss)
+
+        print("Epoch %d train summary:  mean loss" % epoch, sum(losses)/len(losses))
+
+        # Test
+        #
+        if epochLoss < trainEpochLosses[-1]:
+             saveModel(sess)
+        #
 
 
 print("\nFinish learning")
