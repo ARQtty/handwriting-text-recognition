@@ -4,6 +4,7 @@ import tensorflow as tf
 import numpy as np
 from tensorflow.layers import conv2d, max_pooling2d, batch_normalization
 from tensorflow.nn import relu
+import editdistance
 import logging
 tf.get_logger().setLevel(logging.ERROR)
 
@@ -143,10 +144,8 @@ class Model():
                                                  ctc_merge_repeated=True)
 
             # decoder: either best path decoding or beam search decoding
-            self.decoder = tf.nn.ctc_beam_search_decoder(inputs=x,
-                                                         sequence_length=self.seqLenPlaceholder,
-                                                         beam_width=50,
-                                                         merge_repeated=False)
+            self.decoder = tf.nn.ctc_greedy_decoder(inputs=x,
+                                                    sequence_length=self.seqLenPlaceholder)
 
             tf.summary.scalar('batch_loss', self.loss)
 
@@ -166,11 +165,7 @@ class Model():
         # go over all texts
         for (batchElement, text) in enumerate(gtTexts):
             # convert to string of label (i.e. class-ids)
-            try:
-                labelStr = [charList.index(c) for c in text]
-            except Exception as e:
-                print("cant find char in %s" % text)
-                raise e
+            labelStr = [charList.index(c) for c in text]
             # sparse tensor must have size of max. label-string
             if len(labelStr) > shape[1]:
                 shape[1] = len(labelStr)
@@ -242,13 +237,75 @@ class Model():
             print("Epoch %d train summary:  mean loss %.2f" % (epoch, epochLoss))
 
             # Test
-            #
-            # if epochLoss < trainEpochLosses[-1]:
-            #      saveModel(sess)
-            #
+            charErrRate = self.validate()
+            if epochLoss < trainEpochLosses[-1]:
+                 saveModel(sess)
+
 
 
         print("\nFinish learning")
+
+
+    def decoderOutputToText(self, ctcOutput, batchSize):
+        "extract texts from output of CTC decoder"
+        # contains string of labels for each batch element
+        encodedLabelStrs = [[] for i in range(batchSize)]
+
+        # TF decoders: label strings are contained in sparse tensor
+        # ctc returns tuple, first element is SparseTensor
+        decoded = ctcOutput[0][0]
+        # go over all indices and save mapping: batch -> values
+        idxDict = { b : [] for b in range(batchSize) }
+        for (idx, idx2d) in enumerate(decoded.indices):
+            label = decoded.values[idx]
+            batchElement = idx2d[0] # index according to [b,t]
+            encodedLabelStrs[batchElement].append(label)
+
+        # map labels to chars for all batch elements
+        return [str().join([charList[c] for c in labelStr]) for labelStr in encodedLabelStrs]
+
+
+    def validate(self, calcProbability=True):
+        numCharErr = 0
+        numCharTotal = 0
+        numWordOK = 0
+        numWordTotal = 0
+
+        for i, batch in preprocess.batchGenerator(batchSize=50, mode='test'):
+            # infer batch
+            numBatchElements = len(batch[0])
+            evalRnnOutput = calcProbability
+            evalList = [self.decoder]
+            feedDict = {self.inputImgsPlaceholder : batch[0], self.seqLenPlaceholder : [maxTextLen] * numBatchElements}
+            evalRes = self.sess.run(evalList, feedDict)
+            decoded = evalRes[0]
+            recognized = self.decoderOutputToText(decoded, numBatchElements)
+
+            # feed RNN output and recognized text into CTC loss to compute labeling probability
+            probs = None
+            if calcProbability:
+                sparse = self.toSparse(recognized) #self.toSparse(batch[1]) if probabilityOfGT else self.toSparse(recognized)
+                ctcInput = evalRes[1]
+                evalList = [self.lossPerElement]
+                feedDict = {self.savedCtcInput: ctcInput, self.gtTextsPlaceholder : sparse, self.seqLenPlaceholder : [32] * numBatchElements}
+                lossVals = self.sess.run(evalList, feedDict)
+                probs = np.exp(-lossVals)
+
+
+            for i in range(len(recognized)):
+                numWordOK += 1 if batch[1][i] == recognized[i] else 0
+                numWordTotal += 1
+                dist = editdistance.eval(recognized[i], batch[1][i])
+                numCharErr += dist
+                numCharTotal += len(batch[1][i])
+                print('[OK]' if dist==0 else '[ERR:%d]' % dist,'"' + batch[1][i] + '"', '->', '"' + recognized[i] + '"')
+
+        # print validation result
+        charErrorRate = numCharErr / numCharTotal
+        wordAccuracy = numWordOK / numWordTotal
+        print('Character error rate: %f%%. Word accuracy: %f%%.' % (charErrorRate*100.0, wordAccuracy*100.0))
+        return charErrorRate
+
 
 
 model = Model()

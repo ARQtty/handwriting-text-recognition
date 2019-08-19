@@ -119,14 +119,14 @@ def loadCharList():
 def batchGenerator(batchSize=512, mode='train'):
     df = loadWords()
 
-    start = 0
+    start = (1450+738)*50
     # 95% for train
     stop = int(df.shape[0] * 0.95)
     num = 0
 
     if (mode == 'test'):
         # 5% for validation
-        start = int(df.shape[0]*0.95)
+        start = int(df.shape[0]*0.95) + 100
         stop = df.shape[0]
 
     while start + batchSize < stop:
